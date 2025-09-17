@@ -8,6 +8,7 @@ interface JSONTreeViewerProps {
   onValueSelect: (value: SelectedValue) => void;
   onToggleExpand: (nodePath: string) => void;
   onD2PointerClick: (pointerId: number, path: string[]) => void;
+  onLineHover?: (lineNumber: number | null) => void;
 }
 
 export function JSONTreeViewer({
@@ -16,7 +17,8 @@ export function JSONTreeViewer({
   loadingPointers,
   onValueSelect,
   onToggleExpand,
-  onD2PointerClick
+  onD2PointerClick,
+  onLineHover
 }: JSONTreeViewerProps) {
   const treeNodes = useMemo(() => buildTreeNodes(data, expandedNodes), [data, expandedNodes]);
 
@@ -32,6 +34,7 @@ export function JSONTreeViewer({
             onValueSelect={onValueSelect}
             onToggleExpand={onToggleExpand}
             onD2PointerClick={onD2PointerClick}
+            onLineHover={onLineHover}
           />
         ))}
       </div>
@@ -58,7 +61,9 @@ function buildTreeNodes(
       isExpanded,
       level: 0,
       path: [],
-      children: isExpanded ? buildObjectChildren(data, expandedNodes, level + 1, []) : undefined
+      sourceLine: 1, // Root is on line 1
+      sourceChunk: 'root.d2.jsonl',
+      children: isExpanded ? buildObjectChildren(data, expandedNodes, level + 1, [], 2) : undefined
     });
   }
 
@@ -69,7 +74,8 @@ function buildObjectChildren(
   obj: Record<string, unknown>,
   expandedNodes: Set<string>,
   level: number,
-  path: string[]
+  path: string[],
+  startLine = 1
 ): D2TreeNode[] {
   const entries = Object.entries(obj);
   
@@ -79,14 +85,24 @@ function buildObjectChildren(
     const type = getValueType(value);
     const isLast = index === entries.length - 1;
     const isExpanded = expandedNodes.has(pathKey);
+    const lineNumber = startLine + index;
+
+    // Determine source chunk based on value type and content
+    let sourceChunk = 'root.d2.jsonl';
+    let sourceLine = lineNumber;
+    
+    if (type === 'd2-pointer' && typeof value === 'number') {
+      sourceChunk = 'root.d2.jsonl'; // Pointer itself is in root
+      sourceLine = lineNumber;
+    }
 
     let children: D2TreeNode[] | undefined;
     
     if (isExpanded) {
       if (type === 'object' && value && typeof value === 'object') {
-        children = buildObjectChildren(value as Record<string, unknown>, expandedNodes, level + 1, currentPath);
+        children = buildObjectChildren(value as Record<string, unknown>, expandedNodes, level + 1, currentPath, lineNumber * 100);
       } else if (type === 'array' && Array.isArray(value)) {
-        children = buildArrayChildren(value, expandedNodes, level + 1, currentPath);
+        children = buildArrayChildren(value, expandedNodes, level + 1, currentPath, lineNumber * 100);
       }
     }
 
@@ -98,6 +114,8 @@ function buildObjectChildren(
       level,
       isLast,
       path: currentPath,
+      sourceLine,
+      sourceChunk,
       children
     };
   });
@@ -107,7 +125,8 @@ function buildArrayChildren(
   arr: unknown[],
   expandedNodes: Set<string>,
   level: number,
-  path: string[]
+  path: string[],
+  startLine = 1
 ): D2TreeNode[] {
   return arr.map((value, index) => {
     const currentPath = [...path, index.toString()];
@@ -115,14 +134,15 @@ function buildArrayChildren(
     const type = getValueType(value);
     const isLast = index === arr.length - 1;
     const isExpanded = expandedNodes.has(pathKey);
+    const lineNumber = startLine + index;
 
     let children: D2TreeNode[] | undefined;
     
     if (isExpanded) {
       if (type === 'object' && value && typeof value === 'object') {
-        children = buildObjectChildren(value as Record<string, unknown>, expandedNodes, level + 1, currentPath);
+        children = buildObjectChildren(value as Record<string, unknown>, expandedNodes, level + 1, currentPath, lineNumber * 100);
       } else if (type === 'array' && Array.isArray(value)) {
-        children = buildArrayChildren(value, expandedNodes, level + 1, currentPath);
+        children = buildArrayChildren(value, expandedNodes, level + 1, currentPath, lineNumber * 100);
       }
     }
 
@@ -134,6 +154,8 @@ function buildArrayChildren(
       level,
       isLast,
       path: currentPath,
+      sourceLine: lineNumber,
+      sourceChunk: 'root.d2.jsonl',
       children
     };
   });
@@ -159,6 +181,7 @@ interface TreeNodeProps {
   onValueSelect: (value: SelectedValue) => void;
   onToggleExpand: (nodePath: string) => void;
   onD2PointerClick: (pointerId: number, path: string[]) => void;
+  onLineHover?: (lineNumber: number | null) => void;
 }
 
 function TreeNode({
@@ -167,7 +190,8 @@ function TreeNode({
   loadingPointers,
   onValueSelect,
   onToggleExpand,
-  onD2PointerClick
+  onD2PointerClick,
+  onLineHover
 }: TreeNodeProps) {
   const pathKey = node.path.join('.');
   const indentLevel = node.level;
@@ -180,13 +204,27 @@ function TreeNode({
         onD2PointerClick(node.value, node.path);
       }
     } else {
-      // Select primitive value
+      // Select primitive value with source information
       onValueSelect({
         type: node.type,
         value: node.value,
         size: getValueSize(node.value),
-        path: node.path
+        path: node.path,
+        sourceLine: node.sourceLine,
+        sourceChunk: node.sourceChunk
       });
+    }
+  };
+
+  const handleMouseEnter = () => {
+    if (onLineHover && node.sourceLine) {
+      onLineHover(node.sourceLine);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (onLineHover) {
+      onLineHover(null);
     }
   };
 
@@ -246,6 +284,8 @@ function TreeNode({
         <button
           type="button"
           onClick={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
           className="text-blue-600 dark:text-blue-400 underline hover:text-blue-800 dark:hover:text-blue-300 cursor-pointer"
         >
           {node.value} 🔗
@@ -259,6 +299,8 @@ function TreeNode({
         <button
           type="button"
           onClick={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
           className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-1"
         >
           {node.isExpanded ? '{' : `{...} (${count} properties)`}
@@ -272,6 +314,8 @@ function TreeNode({
         <button
           type="button"
           onClick={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
           className="cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-1"
         >
           {node.isExpanded ? '[' : `[${count}]`}
@@ -284,6 +328,8 @@ function TreeNode({
         <button
           type="button"
           onClick={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
           className="text-green-600 dark:text-green-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-1"
         >
           "{String(node.value)}"
@@ -296,6 +342,8 @@ function TreeNode({
         <button
           type="button"
           onClick={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
           className="text-blue-600 dark:text-blue-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-1"
         >
           {String(node.value)}
@@ -308,6 +356,8 @@ function TreeNode({
         <button
           type="button"
           onClick={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
           className="text-orange-600 dark:text-orange-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-1"
         >
           {String(node.value)}
@@ -320,6 +370,8 @@ function TreeNode({
         <button
           type="button"
           onClick={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
           className="text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-1"
         >
           null
@@ -354,6 +406,7 @@ function TreeNode({
               onValueSelect={onValueSelect}
               onToggleExpand={onToggleExpand}
               onD2PointerClick={onD2PointerClick}
+              onLineHover={onLineHover}
             />
           ))}
           {node.type === 'object' && (

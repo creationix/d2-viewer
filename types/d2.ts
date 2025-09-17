@@ -33,11 +33,28 @@ export interface D2Pointer {
   isLoaded?: boolean;
 }
 
+export interface D2SourceLine {
+  lineNumber: number;
+  content: string;
+  chunkName: string;
+  isHighlighted?: boolean;
+  highlightType?: "selected" | "hover";
+}
+
+export interface D2ChunkData {
+  chunkName: string;
+  lines: D2SourceLine[];
+  startLine: number;
+  endLine: number;
+}
+
 export interface SelectedValue {
   type: D2ValueType;
   value: unknown;
   size?: string;
   path: string[];
+  sourceLine?: number;
+  sourceChunk?: string;
 }
 
 export interface D2TreeNode {
@@ -49,6 +66,14 @@ export interface D2TreeNode {
   level: number;
   isLast?: boolean;
   path: string[];
+  sourceLine?: number;
+  sourceChunk?: string;
+}
+
+export interface D2SourceViewerState {
+  currentChunk: D2ChunkData | null;
+  selectedLine: number | null;
+  hoveredLine: number | null;
 }
 
 export interface D2BrowserState {
@@ -58,4 +83,6 @@ export interface D2BrowserState {
   treeData: Record<string, unknown>;
   expandedNodes: Set<string>;
   loadingPointers: Set<number>;
+  sourceViewer: D2SourceViewerState;
+  loadedChunks: Map<string, D2ChunkData>;
 }

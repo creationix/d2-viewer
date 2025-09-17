@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import type { D2BrowserState, SelectedValue, ActivityLogEntry } from '@/types/d2';
-import { Sidebar } from './Sidebar';
-import { JSONTreeViewer } from './JSONTreeViewer';
-import { ValueInspector } from './ValueInspector';
+import type { D2BrowserState, SelectedValue, ActivityLogEntry, D2ChunkData, D2SourceLine } from '@/types/d2';
+import { Sidebar } from '@/components/Sidebar';
+import { JSONTreeViewer } from '@/components/JSONTreeViewer';
+import { LiveD2SourceViewer } from '@/components/LiveD2SourceViewer';
 
 // Mock initial data for demonstration
 const initialData = {
@@ -56,6 +56,118 @@ const initialStats = {
   dataTransferred: "4.2 KB"
 };
 
+// Generate mock D2 source chunks
+const generateMockChunk = (chunkName: string, startLine: number, data: Record<string, unknown>): D2ChunkData => {
+  const lines: D2SourceLine[] = [];
+  let currentLine = startLine;
+  
+  // Convert the data object to individual JSON lines
+  const entries = Object.entries(data);
+  entries.forEach(([key, value]) => {
+    lines.push({
+      lineNumber: currentLine,
+      content: JSON.stringify({ [key]: value }),
+      chunkName
+    });
+    currentLine++;
+  });
+
+  return {
+    chunkName,
+    lines,
+    startLine,
+    endLine: currentLine - 1
+  };
+};
+
+// Create the root chunk
+const rootChunk = generateMockChunk('root.d2.jsonl', 1, initialData);
+
+// Mock chunks for D2 pointers
+const profileChunk: D2ChunkData = {
+  chunkName: '12345.d2.jsonl',
+  lines: [
+    {
+      lineNumber: 12345,
+      content: JSON.stringify({
+        "bio": "Software developer with 10+ years experience in distributed systems and data compression"
+      }),
+      chunkName: '12345.d2.jsonl'
+    },
+    {
+      lineNumber: 12346,
+      content: JSON.stringify({
+        "avatar": "https://example.com/avatars/johndoe.jpg"
+      }),
+      chunkName: '12345.d2.jsonl'
+    },
+    {
+      lineNumber: 12347,
+      content: JSON.stringify({
+        "location": "San Francisco, CA"
+      }),
+      chunkName: '12345.d2.jsonl'
+    },
+    {
+      lineNumber: 12348,
+      content: JSON.stringify({
+        "social": {
+          "twitter": "@johndoe",
+          "github": "johndoe",
+          "linkedin": "john-doe"
+        }
+      }),
+      chunkName: '12345.d2.jsonl'
+    }
+  ],
+  startLine: 12345,
+  endLine: 12348
+};
+
+const categoriesChunk: D2ChunkData = {
+  chunkName: '67890.d2.jsonl',
+  lines: [
+    {
+      lineNumber: 67890,
+      content: JSON.stringify(["Technology", "Science", "Art", "Music"]),
+      chunkName: '67890.d2.jsonl'
+    },
+    {
+      lineNumber: 67891,
+      content: JSON.stringify(["Travel", "Food", "Photography", "Gaming"]),
+      chunkName: '67890.d2.jsonl'
+    }
+  ],
+  startLine: 67890,
+  endLine: 67891
+};
+
+const referencesChunk: D2ChunkData = {
+  chunkName: '99999.d2.jsonl',
+  lines: [
+    {
+      lineNumber: 99999,
+      content: JSON.stringify({
+        "external_id": "ext_abc123def456",
+        "source": "api.example.com/v2"
+      }),
+      chunkName: '99999.d2.jsonl'
+    },
+    {
+      lineNumber: 100000,
+      content: JSON.stringify({
+        "endpoints": {
+          "users": "/api/v2/users",
+          "profiles": "/api/v2/profiles"
+        }
+      }),
+      chunkName: '99999.d2.jsonl'
+    }
+  ],
+  startLine: 99999,
+  endLine: 100000
+};
+
 export function D2Browser() {
   const [state, setState] = useState<D2BrowserState>({
     stats: initialStats,
@@ -63,15 +175,64 @@ export function D2Browser() {
     selectedValue: null,
     treeData: initialData,
     expandedNodes: new Set(['root']), // Start with root expanded
-    loadingPointers: new Set()
+    loadingPointers: new Set(),
+    sourceViewer: {
+      currentChunk: rootChunk,
+      selectedLine: 1,
+      hoveredLine: null
+    },
+    loadedChunks: new Map([
+      ['root.d2.jsonl', rootChunk],
+      ['12345.d2.jsonl', profileChunk],
+      ['67890.d2.jsonl', categoriesChunk],
+      ['99999.d2.jsonl', referencesChunk]
+    ])
   });
 
   const handleValueSelect = useCallback((selectedValue: SelectedValue) => {
+    setState(prev => {
+      const newState = {
+        ...prev,
+        selectedValue
+      };
+
+      // Update source viewer if we have source line information
+      if (selectedValue.sourceLine && selectedValue.sourceChunk) {
+        const chunk = prev.loadedChunks.get(selectedValue.sourceChunk);
+        if (chunk) {
+          newState.sourceViewer = {
+            ...prev.sourceViewer,
+            currentChunk: chunk,
+            selectedLine: selectedValue.sourceLine
+          };
+        }
+      }
+
+      return newState;
+    });
+  }, []);
+
+  const handleLineHover = useCallback((lineNumber: number | null) => {
     setState(prev => ({
       ...prev,
-      selectedValue
+      sourceViewer: {
+        ...prev.sourceViewer,
+        hoveredLine: lineNumber
+      }
     }));
   }, []);
+
+  const handleCopyChunk = useCallback(async () => {
+    const { currentChunk } = state.sourceViewer;
+    if (!currentChunk) return;
+
+    try {
+      const chunkContent = currentChunk.lines.map(line => line.content).join('\n');
+      await navigator.clipboard.writeText(chunkContent);
+    } catch (error) {
+      console.error('Failed to copy chunk:', error);
+    }
+  }, [state.sourceViewer]);
 
   const handleD2PointerClick = useCallback(async (pointerId: number, path: string[]) => {
     // Add loading state
@@ -185,6 +346,10 @@ export function D2Browser() {
         // Update stats
         const newDataTransferred = parseFloat(prev.stats.dataTransferred.replace(' KB', '')) + parseFloat(size.replace(' KB', ''));
 
+        // Get the corresponding chunk for source viewer
+        const chunkName = `${pointerId}.d2.jsonl`;
+        const chunk = prev.loadedChunks.get(chunkName);
+
         return {
           ...prev,
           treeData: newTreeData,
@@ -194,7 +359,12 @@ export function D2Browser() {
             ...prev.stats,
             chunksLoaded: prev.stats.chunksLoaded + 1,
             dataTransferred: `${newDataTransferred.toFixed(1)} KB`
-          }
+          },
+          sourceViewer: chunk ? {
+            currentChunk: chunk,
+            selectedLine: pointerId,
+            hoveredLine: null
+          } : prev.sourceViewer
         };
       });
 
@@ -236,7 +406,18 @@ export function D2Browser() {
       selectedValue: null,
       treeData: initialData,
       expandedNodes: new Set(['root']), // Start with root expanded
-      loadingPointers: new Set()
+      loadingPointers: new Set(),
+      sourceViewer: {
+        currentChunk: rootChunk,
+        selectedLine: 1,
+        hoveredLine: null
+      },
+      loadedChunks: new Map([
+        ['root.d2.jsonl', rootChunk],
+        ['12345.d2.jsonl', profileChunk],
+        ['67890.d2.jsonl', categoriesChunk],
+        ['99999.d2.jsonl', referencesChunk]
+      ])
     });
   }, []);
 
@@ -287,12 +468,18 @@ export function D2Browser() {
             onValueSelect={handleValueSelect}
             onToggleExpand={handleToggleExpand}
             onD2PointerClick={handleD2PointerClick}
+            onLineHover={handleLineHover}
           />
         </div>
 
-        {/* Right Pane - Inspector */}
+        {/* Right Pane - Live D2 Source Viewer */}
         <div className="w-80 bg-white dark:bg-gray-800 flex-shrink-0">
-          <ValueInspector selectedValue={state.selectedValue} />
+          <LiveD2SourceViewer 
+            currentChunk={state.sourceViewer.currentChunk}
+            selectedLine={state.sourceViewer.selectedLine}
+            hoveredLine={state.sourceViewer.hoveredLine}
+            onCopyChunk={handleCopyChunk}
+          />
         </div>
       </div>
     </div>
